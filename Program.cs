@@ -8,12 +8,12 @@ namespace NoiseProject
         {
 #pragma warning disable CA1416 // Validate platform compatibility
             Bitmap bitmap = new(1024, 1024);
-            N noise = new("seed");
+            FractalNoise noise = new("seed");
             for(int x = 0; x < bitmap.Width; x++)
             {
                 for(int y = 0; y < bitmap.Height; y++)
                 {
-                    bitmap.SetPixel(x, y, Grayscale(noise.FractalValue(x / 128f, y / 128f, 4, 0.6f)));
+                    bitmap.SetPixel(x, y, Grayscale(noise.FractalValue(x / 128f, y / 128f, 4, persistance: 0.6f)));
                 }
             }
             bitmap.Save("image.png");
@@ -28,10 +28,10 @@ namespace NoiseProject
         }
 
     }
-    public class N
+    public class FractalNoise
     {
         public readonly string Seed;
-        public N(string seed)
+        public FractalNoise(string seed)
         {
             Seed = seed;
         }
@@ -47,7 +47,7 @@ namespace NoiseProject
         public static float Lerp(float a, float b, float t) => a + (b - a) * t;
         public static float Dot(v2f a, v2f b) => a.X * b.X + a.Y * b.Y;
         public static int Fastfloor(float t) => (t > 0) ? (int)t : (int)t - 1;
-        public float Value(float x_in, float y_in)
+        public float Value(float x_in, float y_in, string type = "")
         {
             /* some code sourced from a paper by Stefan Gustavson
              * his paper halped me greatly to understand how simplex noise works
@@ -62,15 +62,15 @@ namespace NoiseProject
             v2f[] grads = new v2f[3];
 
             vecs[0] = Add(vec, Inv(V0));
-            grads[0] = grad[H.Hash(i, j, Seed) & 7];
+            grads[0] = grad[HashFunction.Hash(i, j, Seed + type) & 7];
             int i1, j1;
             if (vecs[0].X > vecs[0].Y) { i1 = 1; j1 = 0; }
             else { i1 = 0; j1 = 1; }
             vecs[1] = Add(vecs[0], new(G2 - i1, G2 - j1));
-            grads[1] = grad[H.Hash(i + i1, j + j1, Seed) & 7];
+            grads[1] = grad[HashFunction.Hash(i + i1, j + j1, Seed + type) & 7];
 
             vecs[2] = Add(vecs[0], new(2f * G2 - 1));
-            grads[2] = grad[H.Hash(i + 1, j + 1, Seed) & 7];
+            grads[2] = grad[HashFunction.Hash(i + 1, j + 1, Seed + type) & 7];
 
             float val = 0;
             float t;
@@ -83,14 +83,14 @@ namespace NoiseProject
             }
             return val * 70f;
         }
-        public float FractalValue(float x, float y, int octaves, float persistance = .5f, float lacunarity = 2f)
+        public float FractalValue(float x, float y, int octaves, string type = "", float persistance = .5f, float lacunarity = 2f)
         {
             float val = 0;
             float freq = 1;
             float amplitude = 1;
             for(int i = 0; i < octaves; i++)
             {
-                val += Value(x * freq, y * freq) * amplitude;
+                val += Value(x * freq, y * freq, type) * amplitude;
                 freq *= lacunarity;
                 amplitude *= persistance;
             }
@@ -99,7 +99,7 @@ namespace NoiseProject
         static v2f Add(v2f a, v2f b) => new(a.X+b.X,a.Y+b.Y);
         static v2f Inv(v2f a) => new(-a.X, -a.Y);
     }
-    public class H
+    public class HashFunction
     {
         public static uint Hash(int x, int y, string seed)
         {
@@ -108,8 +108,10 @@ namespace NoiseProject
         }
         public static byte Hash8(int x, int y, string seed)
         {
-            string str = "x:" + x.ToString() + ", y:" + y.ToString();
-            return HashString8(str, seed);
+            byte[] temp = BitConverter.GetBytes(Hash(x, y, seed));
+            byte res = 0;
+            for (int i = 0; i < 4; i++) res ^= temp[i];
+            return res;
         }
         public static uint HashString(string text, string salt = "")
         {
@@ -161,15 +163,6 @@ namespace NoiseProject
             hash += hash >> 6;
 
             return hash;
-        }
-        public static byte HashString8(string text, string salt = "")
-        {
-            if (string.IsNullOrEmpty(text)) return 0;
-            byte[] textbytes = System.Text.Encoding.UTF8.GetBytes(text + salt);
-            byte[] hashbytes = System.Security.Cryptography.SHA256.HashData(textbytes);
-            byte res = 0;
-            for (int i = 0; i < hashbytes.Length; i++) res ^= hashbytes[i];
-            return res;
         }
     }
 #pragma warning disable IDE1006 // Naming Styles
