@@ -1,4 +1,5 @@
 ﻿using System.Drawing;
+using System.Runtime.InteropServices;
 
 namespace NoiseProject
 {
@@ -7,26 +8,113 @@ namespace NoiseProject
         static void Main()
         {
 #pragma warning disable CA1416 // Validate platform compatibility
+            
             Bitmap bitmap = new(1024, 1024);
-            FractalNoise noise = new("seed");
+            string seed = "seed";
+            MapGen Generator = new(seed, new(4, persistance: .7f) { Scale = .1f}, t => t * t * t);
             for(int x = 0; x < bitmap.Width; x++)
             {
                 for(int y = 0; y < bitmap.Height; y++)
                 {
-                    bitmap.SetPixel(x, y, Grayscale(noise.FractalValue(x / 128f, y / 128f, 4, persistance: 0.6f)));
+                    bitmap.SetPixel(x, y, Generator.GetColor(x / 128f, y / 128f));
                 }
             }
-            bitmap.Save("image.png");
+            bitmap.Save($"image {seed}.png");
 #pragma warning restore CA1416 // Validate platform compatibility
         }
-        static Color Grayscale(float val)
+
+    }
+    enum TerrainTypes
+    {
+        Sea,
+        Beach,
+        Intermediate,
+        Mountains
+    }
+    class MapGen
+    {
+        readonly FractalNoise Noise;
+        readonly string Seed;
+        readonly MapSettings heightSettings;
+        readonly TerrainSettings[] terrainSettings;
+        readonly Func<float, float> HeightRamp;
+        readonly static int typeAmt = Enum.GetNames<TerrainTypes>().Length;
+        public MapGen(string seed, MapSettings heightS, Func<float,float> heightRamp)
+        {
+            Seed = seed;
+            Noise = new(Seed);
+            heightSettings = heightS;
+            HeightRamp = heightRamp;
+            terrainSettings = new TerrainSettings[typeAmt];
+            for (int i = 0; i < typeAmt; i++) terrainSettings[i] = new(t => t);
+            SetTerrain(new TerrainSettings(t => MathF.Sqrt(t)) { deepColor = new Ucolor() { rgba = 0x291c12ff }, deepHeight = 0.5f, highColor = new Ucolor() { rgba = 0xeeeeeeff }, highHeight = 1.0f }, TerrainTypes.Mountains) ;
+        }
+        public void SetTerrain(TerrainSettings newSettings, TerrainTypes terrainType)
+        {
+            terrainSettings[(int)terrainType] = newSettings;
+        }
+        public Color GetColor(float x, float y)
+        {
+            float height = HeightRamp(Noise.FractalValue(x, y, heightSettings));
+            return Grayscale(height);
+            for (int i = 0; i < typeAmt; i++)
+            {
+                if (height >= terrainSettings[i].deepHeight && height <= terrainSettings[i].highHeight) return terrainSettings[i].GetColor(height);
+            }
+            return Color.AliceBlue;
+        }
+        public static Color Grayscale(float val)
         {
             int d = 128 + (int)(256 * val);
             if (d > 255) d = 255;
             if (d < 0) d = 0;
-            return Color.FromArgb(d,d,d);
+            return Color.FromArgb(d, d, d);
         }
-
+    }
+    public class TerrainSettings
+    {
+        public Ucolor deepColor;
+        public Ucolor highColor;
+        public float deepHeight;
+        public float highHeight;
+        public Func<float, float> ColorRamp;
+        public Color GetColor(float h)
+        {
+            if (h < deepHeight) h = deepHeight;
+            if (h > highHeight) h = highHeight;
+            float t = ColorRamp((h - deepHeight) / (highHeight - deepHeight));
+            return Ucolor.Lerp(deepColor, highColor, t).Color;
+        }
+        public TerrainSettings(Func<float, float> func)
+        {
+            deepColor = new Ucolor();
+            highColor = new Ucolor();
+            ColorRamp = func;
+        }
+    }
+    public class MapSettings
+    {
+        public int Octaves;
+        public float Persistance;
+        public float Lacunarity;
+        public float Scale = 1f;
+        public float mult;
+        public MapSettings(int octaves = 3, float persistance = .5f, float lacunarity = 2f)
+        {
+            Octaves = octaves; Persistance = persistance; Lacunarity = lacunarity;
+            mult = (1 - persistance) / (1 - Pow(persistance, octaves));
+        }
+        static float Pow(float b, int e)
+        {
+            float res = 1f;
+            while (e > 0)
+            {
+                if ((e & 1) == 1) res *= b;
+                b *= b;
+                e >>= 1;
+            }
+            return res;
+        }
     }
     public class FractalNoise
     {
@@ -83,21 +171,68 @@ namespace NoiseProject
             }
             return val * 70f;
         }
-        public float FractalValue(float x, float y, int octaves, string type = "", float persistance = .5f, float lacunarity = 2f)
+        public float FractalValue(float x, float y, MapSettings settings, string type = "")
         {
             float val = 0;
-            float freq = 1;
+            float freq = settings.Scale;
             float amplitude = 1;
-            for(int i = 0; i < octaves; i++)
+            for(int i = 0; i < settings.Octaves; i++)
             {
                 val += Value(x * freq, y * freq, type) * amplitude;
-                freq *= lacunarity;
-                amplitude *= persistance;
+                freq *= settings.Lacunarity;
+                amplitude *= settings.Persistance;
             }
-            return val * (1 - persistance);
+            return val * settings.mult;
         }
         static v2f Add(v2f a, v2f b) => new(a.X+b.X,a.Y+b.Y);
         static v2f Inv(v2f a) => new(-a.X, -a.Y);
+    }
+    [StructLayout(LayoutKind.Explicit)]
+    public class Ucolor
+    {
+        [FieldOffset(0)]
+        public byte r;
+        [FieldOffset(1)]
+        public byte g;
+        [FieldOffset(2)]
+        public byte b;
+        [FieldOffset(3)]
+        public byte a;
+
+        [FieldOffset(0)]
+        public uint rgba;
+        public byte hash
+        {
+            get
+            {
+                return ((byte)(r ^ g ^ b ^ a));
+            }
+        }
+        public Ucolor()
+        {
+            r = 0; g = 0; b = 0; a = 0; rgba = 0;
+        }
+        public Color Color => Color.FromArgb(a, r, g, b);
+        public static Ucolor Lerp(Ucolor a, Ucolor b, float t)
+        {
+            return new Ucolor()
+            {
+                r = (byte)(a.r + (byte)((b.r - a.r) * t)),
+                g = (byte)(a.g + (byte)((b.g - a.g) * t)),
+                b = (byte)(a.b + (byte)((b.b - a.b) * t)),
+                a = (byte)(a.a + (byte)((b.a - a.a) * t))
+            };
+        }
+        public static Ucolor FromColor(Color color)
+        {
+            return new()
+            {
+                r = color.R,
+                g = color.G,
+                b = color.B,
+                a = color.A
+            };
+        }
     }
     public class HashFunction
     {
@@ -108,10 +243,8 @@ namespace NoiseProject
         }
         public static byte Hash8(int x, int y, string seed)
         {
-            byte[] temp = BitConverter.GetBytes(Hash(x, y, seed));
-            byte res = 0;
-            for (int i = 0; i < 4; i++) res ^= temp[i];
-            return res;
+            Ucolor temp = new() { rgba = Hash(x, y, seed) };
+            return temp.hash;
         }
         public static uint HashString(string text, string salt = "")
         {
